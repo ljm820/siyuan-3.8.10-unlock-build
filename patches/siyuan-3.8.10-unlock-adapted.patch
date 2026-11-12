@@ -1,0 +1,202 @@
+diff --git a/app/src/config/tabs/syncTab.ts b/app/src/config/tabs/syncTab.ts
+index 5022abebd3..517bbd8ec6 100644
+--- a/app/src/config/tabs/syncTab.ts
++++ b/app/src/config/tabs/syncTab.ts
+@@ -1,7 +1,6 @@
+ import {mobileInputDialog} from "../../dialog/mobileInputDialog";
+ import {mobileConfirmDialog} from "../../dialog/mobileConfirmDialog";
+ import type {SettingTabBuilder} from "../setting/builder";
+-import {registerAccountGroup} from "./accountUi";
+ import {Constants} from "../../constants";
+ import {fetchPost, fetchSyncPost} from "../../util/fetch";
+ import {showMessage} from "../../dialog/message";
+@@ -344,7 +343,6 @@ const mountRepoKey = (root: HTMLElement) => {
+ };
+ 
+ export const registerSyncTab = (tab: SettingTabBuilder) => {
+-    registerAccountGroup(tab);
+     registerSyncGroup(tab);
+     registerRepoGroup(tab);
+ };
+diff --git a/app/src/layout/topBar.ts b/app/src/layout/topBar.ts
+index d8c950a4d4..0d9562fccd 100644
+--- a/app/src/layout/topBar.ts
++++ b/app/src/layout/topBar.ts
+@@ -12,7 +12,6 @@ import {initTopBarMenu} from "../menus/topBar";
+ import {MenuItem} from "../menus/Menu";
+ import {hideTooltip} from "../dialog/tooltip";
+ import {setMode} from "../util/assets";
+-import {openSetting} from "../config";
+ import {openSearch} from "../search/spread";
+ import type {App} from "../index";
+ /// #if !BROWSER
+@@ -260,9 +259,6 @@ ${isInMobileApp() ? `<div id="barExit" data-topbar-entry="barExit" class="ft__er
+             event.stopPropagation();
+                 break;
+             } else if (targetId === "toolbarVIP" || targetId === "toolbarTitle") {
+-                if (!window.siyuan.config.readonly) {
+-                    openSetting(app, "sync");
+-                }
+                 event.stopPropagation();
+                 break;
+             } else if (targetId === "barSearch") {
+diff --git a/kernel/api/setting.go b/kernel/api/setting.go
+index 7e9c522dfb..a28541f030 100644
+--- a/kernel/api/setting.go
++++ b/kernel/api/setting.go
+@@ -463,18 +463,23 @@ var getPublish = contractHandler(apicontract.GetPublish, func(c *gin.Context, re
+ })
+ 
+ var getCloudUser = contractHandler(apicontract.GetCloudUser, func(c *gin.Context, request apicontract.SettingCloudUserRequest) apicontract.Response[*apicontract.SettingUser] {
+-	user, err := model.GetCloudUser(request.Token, request.Cached)
+-	data := settingUserPayload(user)
+-	if err == nil {
+-		return apicontract.Success(data)
+-	}
+-	if model.IsInvalidUserRefresh(err) {
+-		return apicontract.GetCloudUser.FailureWithData(255, model.Conf.Language(19), nil)
+-	}
+-	if model.IsCloudAssetSourceChange(err) {
+-		return apicontract.GetCloudUser.FailureWithData(1, err.Error(), data)
+-	}
+-	return apicontract.GetCloudUser.FailureWithData(1, model.Conf.Language(18), data)
++	user := &conf.User{
++		UserId:                     "0",
++		UserName:                   "_",
++		UserAvatarURL:              "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7",
++		UserTitles:                 []*conf.UserTitle{},
++		UserCreateTime:             "29991231 00:00:00",
++		UserSiYuanProExpireTime:    -1,
++		UserToken:                  "token",
++		UserTokenExpireTime:        "32503593600",
++		UserSiYuanSubscriptionType: 1,
++		UserSiYuanOneTimePayStatus: 1,
++	}
++	model.Conf.SetUser(user)
++	data, _ := gulu.JSON.MarshalJSON(user)
++	model.Conf.UserData = util.AESEncrypt(string(data))
++	model.Conf.Save()
++	return apicontract.Success(settingUserPayload(user))
+ }, func(c *gin.Context) *apicontract.Response[*apicontract.SettingUser] {
+ 	if model.IsAdminRoleContext(c) {
+ 		return nil
+diff --git a/kernel/conf/appearance.go b/kernel/conf/appearance.go
+index ba9ece8fca..f9d9ee61f8 100644
+--- a/kernel/conf/appearance.go
++++ b/kernel/conf/appearance.go
+@@ -90,8 +90,8 @@ func NewAppearanceForContainer(mobile bool) *Appearance {
+ 		Icon:                  "litheness",
+ 		CodeBlockThemeLight:   "github",
+ 		CodeBlockThemeDark:    "base16/dracula",
+-		Lang:                  "en",
+-		CloseButtonBehavior:   0,
++		Lang:                  "zh_CN",
++		CloseButtonBehavior:   1,
+ 		HideToolbar:           true,
+ 		HideStatusBar:         false,
+ 		ShowFloatingStatusBar: false,
+diff --git a/kernel/conf/sync.go b/kernel/conf/sync.go
+index 79624eaf0c..278bc072bb 100644
+--- a/kernel/conf/sync.go
++++ b/kernel/conf/sync.go
+@@ -28,8 +28,8 @@ func NewSync() *Sync {
+ 		Enabled:             false,
+ 		Perception:          false,
+ 		Mode:                1,
+-		GenerateConflictDoc: false,
+-		Provider:            ProviderSiYuan,
++		GenerateConflictDoc: true,
++		Provider:            ProviderS3,
+ 		Interval:            30,
+ 		LAN:                 &LANSync{MaxConcurrentReqs: 16},
+ 	}
+diff --git a/kernel/conf/system.go b/kernel/conf/system.go
+index 83bc953486..85b0630604 100644
+--- a/kernel/conf/system.go
++++ b/kernel/conf/system.go
+@@ -61,7 +61,7 @@ type Onboarding struct {
+ func NewSystem() *System {
+ 	return &System{
+ 		NetworkProxy:       &NetworkProxy{},
+-		DownloadInstallPkg: true,
++		DownloadInstallPkg: false,
+ 		UpdateChannel:      UpdateChannelStable,
+ 	}
+ }
+diff --git a/kernel/model/cloud_account_auth.go b/kernel/model/cloud_account_auth.go
+index ea02649ae5..cd2ae7a57f 100644
+--- a/kernel/model/cloud_account_auth.go
++++ b/kernel/model/cloud_account_auth.go
+@@ -26,6 +26,10 @@ func cloudAccountAuthFailureHandler(token string) func() {
+ 	if requestedUser == nil {
+ 		return func() {}
+ 	}
++	// 本地免登录身份没有云端会话，云端认证失败不能清除其同步权限。
++	if requestedUser.UserId == "0" && requestedUser.UserToken == "token" {
++		return func() {}
++	}
+ 	return func() {
+ 		cloudAccountMu.Lock()
+ 		defer cloudAccountMu.Unlock()
+diff --git a/kernel/model/cloud_service.go b/kernel/model/cloud_service.go
+index 3f8cdcd583..622389cbc3 100644
+--- a/kernel/model/cloud_service.go
++++ b/kernel/model/cloud_service.go
+@@ -266,7 +266,6 @@ var (
+ 
+ func RefreshCheckJob2H() {
+ 	go refreshSubscriptionExpirationRemind()
+-	go refreshUser()
+ 	go refreshAnnouncement()
+ }
+ 
+diff --git a/kernel/model/updater.go b/kernel/model/updater.go
+index 3b4cda5aee..4e1b25b738 100644
+--- a/kernel/model/updater.go
++++ b/kernel/model/updater.go
+@@ -20,6 +20,7 @@ import (
+ 	"github.com/88250/gulu"
+ 	"github.com/imroc/req/v3"
+ 	"github.com/siyuan-note/logging"
++	"github.com/siyuan-note/siyuan/kernel/conf"
+ 	"github.com/siyuan-note/siyuan/kernel/util"
+ 	"golang.org/x/mod/semver"
+ )
+@@ -367,6 +368,12 @@ var skipInstallPkgPlatformCached = -1
+ 
+ func skipNewVerInstallPkg() bool {
+ 	confSystemSnapshot := Conf.LoadSystem()
++	// 强制关闭官方安装包自动下载，配置按快照更新。
++	if confSystemSnapshot.DownloadInstallPkg {
++		confSystemSnapshot = UpdateSystemConf(func(system *conf.System) {
++			system.DownloadInstallPkg = false
++		})
++	}
+ 
+ 	if skipInstallPkgPlatformCached == -1 {
+ 		skipInstallPkgPlatformCached = 0
+diff --git a/kernel/model/updater_release.go b/kernel/model/updater_release.go
+index 51828368ff..3f4d1501ac 100644
+--- a/kernel/model/updater_release.go
++++ b/kernel/model/updater_release.go
+@@ -27,8 +27,8 @@ import (
+ )
+ 
+ const (
+-	githubReleasesURL            = "https://api.github.com/repos/siyuan-note/siyuan/releases?per_page=100"
+-	githubReleaseURLPrefix       = "https://github.com/siyuan-note/siyuan/releases/tag/v"
++	githubReleasesURL            = "https://api.github.com/repos/appdev/siyuan-unlock/releases?per_page=100"
++	githubReleaseURLPrefix       = "https://github.com/appdev/siyuan-unlock/releases/tag/v"
+ 	githubAPIReleaseCacheSeconds = int64(6 * 60 * 60)
+ 	maxChecksumManifestSize      = int64(1024 * 1024)
+ )
+@@ -69,9 +69,6 @@ var (
+ 
+ func getUpdateRelease(force bool) (*updateRelease, error) {
+ 	channel := Conf.System.Load().UpdateChannel
+-	if conf.UpdateChannelStable == channel {
+-		return getStableUpdateRelease(force)
+-	}
+ 	if !isValidUpdateChannel(channel) {
+ 		return nil, errors.New("update channel is invalid")
+ 	}
